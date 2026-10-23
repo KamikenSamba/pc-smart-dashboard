@@ -5,6 +5,8 @@ TFT_eSPI tft = TFT_eSPI();
 
 void setup() {
   // put your setup code here, to run once:
+  Serial.begin(115200);
+
   pinMode(27, OUTPUT);
   digitalWrite(27, HIGH);
 
@@ -52,6 +54,8 @@ void setup() {
 
 
 void loop() {
-  // put your main code here, to run repeatedly:
+  if (Serial.available() > 0) {
+      String message = Serial.readStringUntil('\n');
+      tft.drawString(message, tft.width() / 2, 300, 2);  }
 }
 
