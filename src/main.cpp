@@ -54,10 +54,28 @@ void setup() {
   }
 }
 
+void updateCpuDisplay(float cpu) {
+  tft.fillRect(65, 135, 120, 32, TFT_BLACK);
+  tft.drawString(String(cpu, 0) + "%", margin + panelWidth / 2, 150, 2);
+  tft.fillRect(margin + (panelWidth - bar_width) / 2 + 1, 210 + 1, innerWidth, innerHeight, TFT_BLACK);
+  if (cpu > 0)
+    {
+    tft.fillRect(margin + (panelWidth - bar_width) / 2 + 1, 210 + 1, (innerWidth * cpu) / 100, innerHeight, TFT_BLUE);
+    }
+}
+
+void updateRamDisplay(float ram) {
+  const int ramCenterX = tft.width() / 2 + 10 + panelWidth / 2;
+  tft.fillRect(275, 135, 120, 32, TFT_BLACK);
+  tft.drawString(String(ram, 0) + "%", ramCenterX, 150, 2);
+  tft.fillRect(271, 211, 168, 10, TFT_BLACK);
+  if (ram > 0)
+    {
+    tft.fillRect(271, 211, (168 * ram) / 100, 10, TFT_GREEN);
+    }
+}
 
 void loop() {
-  const int ramCenterX = tft.width() / 2 + 10 + panelWidth / 2;
-
 
   if (Serial.available() > 0) {
     String message = Serial.readStringUntil('\n');
@@ -79,26 +97,7 @@ void loop() {
     tft.fillRect(0, 280, tft.width(), 40, TFT_BLACK);
     tft.drawString(info, tft.width() / 2, 300, 2);
 
-    //CPU使用率表示
-    tft.fillRect(65, 135, 120, 32, TFT_BLACK);
-    tft.drawString(String(cpu, 0) + "%", margin + panelWidth / 2, 150, 2);
-    //CPUバー表示
-    tft.fillRect(margin + (panelWidth - bar_width) / 2 + 1, 210 + 1, innerWidth, innerHeight, TFT_BLACK);
-    if (cpu > 0)
-      {
-      tft.fillRect(margin + (panelWidth - bar_width) / 2 + 1, 210 + 1, (innerWidth * cpu) / 100, innerHeight, TFT_BLUE);
-      }
-
-    //RAM使用率表示
-    tft.fillRect(275, 135, 120, 32, TFT_BLACK);
-    tft.drawString(String(ram, 0) + "%", ramCenterX, 150, 2);
-    //RAMバー表示
-    tft.fillRect(271, 211, 168, 10, TFT_BLACK);
-    if (ram > 0)
-      {
-      tft.fillRect(271, 211, (168 * ram) / 100, 10, TFT_GREEN);
-      }
+    updateCpuDisplay(cpu);
+    updateRamDisplay(ram);
   }
 }
-
-
