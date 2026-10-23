@@ -4,6 +4,17 @@
 
 TFT_eSPI tft = TFT_eSPI();
 
+const int margin = 20;
+const int panelWidth = 210;
+const int panelHeight = 180;
+
+const int bar_width = 170;
+const int bar_height = 12;
+const int innerWidth = bar_width - 2;
+const int innerHeight = bar_height - 2;
+const float cpu_usage = 0; // Example CPU usage percentage 
+const float ram_usage = 0; // Example RAM usage percentage
+
 void setup() {
   // put your setup code here, to run once:
   Serial.begin(115200);
@@ -20,16 +31,6 @@ void setup() {
 
   const int centerX = tft.width() / 2;
   const int centerY = tft.height() / 2; 
-  const int margin = 20;
-  const int panelWidth = 210;
-  const int panelHeight = 180;
-
-  const int bar_width = 170;
-  const int bar_height = 12;
-  const int innerWidth = bar_width - 2;
-  const int innerHeight = bar_height - 2;
-  const float cpu_usage = 0; // Example CPU usage percentage 
-  const float ram_usage = 0; // Example RAM usage percentage
 
   tft.drawString("PC SMART DASHBOARD", centerX, margin, 2);
 
@@ -53,8 +54,29 @@ void setup() {
   }
 }
 
+void updateCpuDisplay(float cpu) {
+  tft.fillRect(65, 135, 120, 32, TFT_BLACK);
+  tft.drawString(String(cpu, 0) + "%", margin + panelWidth / 2, 150, 2);
+  tft.fillRect(margin + (panelWidth - bar_width) / 2 + 1, 210 + 1, innerWidth, innerHeight, TFT_BLACK);
+  if (cpu > 0)
+    {
+    tft.fillRect(margin + (panelWidth - bar_width) / 2 + 1, 210 + 1, (innerWidth * cpu) / 100, innerHeight, TFT_BLUE);
+    }
+}
+
+void updateRamDisplay(float ram) {
+  const int ramCenterX = tft.width() / 2 + 10 + panelWidth / 2;
+  tft.fillRect(275, 135, 120, 32, TFT_BLACK);
+  tft.drawString(String(ram, 0) + "%", ramCenterX, 150, 2);
+  tft.fillRect(271, 211, 168, 10, TFT_BLACK);
+  if (ram > 0)
+    {
+    tft.fillRect(271, 211, (168 * ram) / 100, 10, TFT_GREEN);
+    }
+}
 
 void loop() {
+
   if (Serial.available() > 0) {
     String message = Serial.readStringUntil('\n');
 
@@ -72,10 +94,10 @@ void loop() {
 
     String info = "CPU: " + String(cpu, 0)
                 + "% RAM: " + String(ram, 0) + "%";
-
     tft.fillRect(0, 280, tft.width(), 40, TFT_BLACK);
     tft.drawString(info, tft.width() / 2, 300, 2);
+
+    updateCpuDisplay(cpu);
+    updateRamDisplay(ram);
   }
 }
-
-
