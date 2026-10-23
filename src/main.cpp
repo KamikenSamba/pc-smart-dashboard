@@ -57,6 +57,7 @@ void setup() {
 void loop() {
   if (Serial.available() > 0) {
       String message = Serial.readStringUntil('\n');
+<<<<<<< HEAD
       JsonDocument doc;
       DeserializationError error = deserializeJson(doc, message);
       if (error) {
@@ -69,6 +70,9 @@ void loop() {
       tft.fillRect(0, 280, tft.width(), 40, TFT_BLACK);
       tft.drawString(info, tft.width() / 2, 300, 2);
   }
+=======
+      tft.drawString(message, tft.width() / 2, 300, 2);  }
+>>>>>>> origin/main
 }
 
 
