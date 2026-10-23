@@ -1,5 +1,6 @@
 #include <Arduino.h>
 #include <TFT_eSPI.h>
+#include <ArduinoJson.h>
 
 TFT_eSPI tft = TFT_eSPI();
 
@@ -56,6 +57,18 @@ void setup() {
 void loop() {
   if (Serial.available() > 0) {
       String message = Serial.readStringUntil('\n');
-      tft.drawString(message, tft.width() / 2, 300, 2);  }
+      JsonDocument doc;
+      DeserializationError error = deserializeJson(doc, message);
+      if (error) {
+        tft.drawString("JSON ERROR", tft.width() / 2, 300, 2);
+        return;
+      }
+      float cpu = doc["cpu"].as<float>();
+      float ram = doc["ram"].as<float>();
+      String info = String("CPU: ") + String(cpu, 0) + "% RAM: " + String(ram, 0) + "%";
+      tft.fillRect(0, 280, tft.width(), 40, TFT_BLACK);
+      tft.drawString(info, tft.width() / 2, 300, 2);
+  }
 }
+
 
