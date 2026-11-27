@@ -1,13 +1,19 @@
 import io
 import json
 import unittest
-from contextlib import ExitStack, redirect_stdout
+from contextlib import ExitStack, redirect_stderr, redirect_stdout
 from types import SimpleNamespace
 from unittest.mock import Mock, call, patch
 
 import serial
 
 from pc import monitor
+
+
+def usb_port(device, *, vid=0x1A86, pid=0x7523, serial_number=None, location=None):
+    return SimpleNamespace(
+        device=device, vid=vid, pid=pid, serial_number=serial_number, location=location
+    )
 
 
 class Connection:
@@ -27,10 +33,16 @@ class MonitorTests(unittest.TestCase):
         stack = self.enterContext(ExitStack())
         self.output = stack.enter_context(redirect_stdout(io.StringIO()))
         self.open_port = stack.enter_context(patch.object(monitor.serial, "Serial"))
+        self.enumerate_ports = stack.enter_context(
+            patch.object(monitor.list_ports, "comports")
+        )
         self.sleep = stack.enter_context(patch.object(monitor.time, "sleep"))
         self.cpu = stack.enter_context(patch.object(monitor.psutil, "cpu_percent"))
         self.ram = stack.enter_context(patch.object(monitor.psutil, "virtual_memory"))
         self.ram.return_value = SimpleNamespace(percent=42.5)
+
+    def run_manual(self):
+        monitor.main(["--port", "COM3"])
 
     def assert_stopped(self):
         self.assertIn("モニタリングを終了しました", self.output.getvalue())
@@ -40,9 +52,10 @@ class MonitorTests(unittest.TestCase):
         self.open_port.return_value = connection
         self.cpu.side_effect = [12.5, 25.0, KeyboardInterrupt]
 
-        monitor.main()
+        self.run_manual()
 
         self.open_port.assert_called_once_with("COM3", 115200, write_timeout=1)
+        self.enumerate_ports.assert_not_called()
         self.assertEqual(self.cpu.call_args_list, [call(interval=1)] * 3)
         self.assertEqual(self.ram.call_count, 2)
         self.assertEqual(connection.write.call_count, 2)
@@ -75,7 +88,7 @@ class MonitorTests(unittest.TestCase):
         self.open_port.side_effect = open_port
         self.cpu.side_effect = [10, KeyboardInterrupt]
 
-        monitor.main()
+        self.run_manual()
 
         self.assertEqual(attempts, [0, 2, 4, 6])
         self.assertEqual(self.sleep.call_args_list, [call(2)] * 4)
@@ -102,7 +115,7 @@ class MonitorTests(unittest.TestCase):
                         failed.close.assert_called_once()
 
                 self.sleep.side_effect = sleep
-                monitor.main()
+                self.run_manual()
 
                 self.assertEqual(self.open_port.call_count, 2)
                 self.assertEqual(self.sleep.call_args_list, [call(2)] * 3)
@@ -126,7 +139,7 @@ class MonitorTests(unittest.TestCase):
         self.open_port.side_effect = connections
         self.cpu.side_effect = [1, 2, 3, 4, 5, KeyboardInterrupt]
 
-        monitor.main()
+        self.run_manual()
 
         self.assertEqual(self.open_port.call_count, 3)
         self.assertEqual(self.sleep.call_args_list, [call(2)] * 5)
@@ -141,7 +154,7 @@ class MonitorTests(unittest.TestCase):
         self.open_port.side_effect = [failed, restored]
         self.cpu.side_effect = [10, 20, KeyboardInterrupt]
 
-        monitor.main()
+        self.run_manual()
 
         self.assertEqual(self.open_port.call_count, 2)
         failed.close.assert_called_once()
@@ -150,7 +163,7 @@ class MonitorTests(unittest.TestCase):
     def test_ctrl_c_during_open_exits_without_retry(self):
         self.open_port.side_effect = KeyboardInterrupt
 
-        monitor.main()
+        self.run_manual()
 
         self.open_port.assert_called_once()
         self.sleep.assert_not_called()
@@ -160,7 +173,7 @@ class MonitorTests(unittest.TestCase):
         self.open_port.side_effect = serial.SerialException("missing")
         self.sleep.side_effect = KeyboardInterrupt
 
-        monitor.main()
+        self.run_manual()
 
         self.open_port.assert_called_once()
         self.sleep.assert_called_once_with(2)
@@ -171,7 +184,7 @@ class MonitorTests(unittest.TestCase):
         self.open_port.return_value = connection
         self.sleep.side_effect = KeyboardInterrupt
 
-        monitor.main()
+        self.run_manual()
 
         connection.close.assert_called_once()
         connection.write.assert_not_called()
@@ -182,7 +195,7 @@ class MonitorTests(unittest.TestCase):
         self.open_port.return_value = connection
         self.cpu.return_value = 10
 
-        monitor.main()
+        self.run_manual()
 
         connection.close.assert_called_once()
         self.sleep.assert_called_once_with(2)
@@ -191,11 +204,138 @@ class MonitorTests(unittest.TestCase):
     def test_os_error_on_open_retries(self):
         self.open_port.side_effect = [OSError("unavailable"), KeyboardInterrupt]
 
-        monitor.main()
+        self.run_manual()
 
         self.assertEqual(self.open_port.call_count, 2)
         self.sleep.assert_called_once_with(2)
         self.assert_stopped()
+
+    def test_usb_serial_reconnects_to_the_same_device_on_a_different_com_port(self):
+        unrelated = usb_port("COM4", serial_number="OTHER")
+        self.enumerate_ports.side_effect = [
+            [unrelated, usb_port("COM3", serial_number="TARGET")],
+            [unrelated],
+            [unrelated, usb_port("COM7", serial_number="TARGET")],
+        ]
+        initial = Connection()
+        initial_message = b'{"cpu": 10, "ram": 42.5}\n'
+        initial.write.side_effect = [
+            len(initial_message),
+            serial.SerialException("unplugged"),
+        ]
+        restored = Connection()
+        self.open_port.side_effect = [initial, restored]
+        self.cpu.side_effect = [10, 20, 30, KeyboardInterrupt]
+
+        monitor.main(["--usb-serial", "1a86:7523", "TARGET"])
+
+        self.assertEqual(self.enumerate_ports.call_count, 3)
+        self.assertEqual(
+            self.open_port.call_args_list,
+            [call("COM3", 115200, write_timeout=1), call("COM7", 115200, write_timeout=1)],
+        )
+        self.assertEqual(initial.write.call_args_list[0], call(initial_message))
+        self.assertEqual(self.sleep.call_args_list, [call(2)] * 4)
+        restored.write.assert_called_once_with(b'{"cpu": 30, "ram": 42.5}\n')
+        initial.close.assert_called_once()
+        restored.close.assert_called_once()
+        self.assert_stopped()
+
+    def test_usb_location_requires_both_the_hardware_id_and_the_location(self):
+        other_location = usb_port("COM4", location="1-4.5")
+        self.enumerate_ports.side_effect = [
+            [],
+            [
+                usb_port("COM1", vid=None, pid=None, location="1-4.4"),
+                usb_port("COM3"),
+                usb_port("COM5", pid=0x6001, location="1-4.4"),
+                other_location,
+            ],
+            [other_location, usb_port("COM6", location="1-4.4")],
+        ]
+        connection = Connection()
+        self.open_port.return_value = connection
+        self.cpu.side_effect = [15, KeyboardInterrupt]
+
+        monitor.main(["--usb-location", "1A86:7523", "1-4.4"])
+
+        self.assertEqual(self.enumerate_ports.call_count, 3)
+        self.assertEqual(self.sleep.call_args_list, [call(2)] * 3)
+        self.open_port.assert_called_once_with("COM6", 115200, write_timeout=1)
+        connection.write.assert_called_once_with(b'{"cpu": 15, "ram": 42.5}\n')
+
+    def test_ambiguous_usb_identity_never_opens_a_port(self):
+        self.enumerate_ports.return_value = [
+            usb_port("COM3", serial_number="DUPLICATE"),
+            usb_port("COM4", serial_number="DUPLICATE"),
+        ]
+        self.sleep.side_effect = [None, KeyboardInterrupt]
+
+        monitor.main(["--usb-serial", "1A86:7523", "DUPLICATE"])
+
+        self.assertEqual(self.enumerate_ports.call_count, 2)
+        self.assertEqual(self.sleep.call_args_list, [call(2), call(2)])
+        self.open_port.assert_not_called()
+        self.cpu.assert_not_called()
+        self.assertIn("複数のポートが一致", self.output.getvalue())
+        self.assert_stopped()
+
+    def test_usb_serial_does_not_fall_back_to_a_device_with_missing_serial(self):
+        self.enumerate_ports.return_value = [usb_port("COM3", location="1-4.4")]
+        self.sleep.side_effect = KeyboardInterrupt
+
+        monitor.main(["--usb-serial", "1A86:7523", "TARGET"])
+
+        self.open_port.assert_not_called()
+        self.assert_stopped()
+
+    def test_detection_recovers_after_enumeration_and_open_errors(self):
+        self.enumerate_ports.side_effect = [
+            OSError("enumeration failed"),
+            [usb_port("COM3", location="1-4.4")],
+            [usb_port("COM7", location="1-4.4")],
+        ]
+        connection = Connection()
+        self.open_port.side_effect = [serial.SerialException("port disappeared"), connection]
+        self.cpu.side_effect = [15, KeyboardInterrupt]
+
+        monitor.main(["--usb-location", "1A86:7523", "1-4.4"])
+
+        self.assertEqual(self.enumerate_ports.call_count, 3)
+        self.assertEqual(
+            self.open_port.call_args_list,
+            [call("COM3", 115200, write_timeout=1), call("COM7", 115200, write_timeout=1)],
+        )
+        self.assertEqual(self.sleep.call_args_list, [call(2)] * 3)
+        connection.write.assert_called_once()
+
+    def test_ctrl_c_during_detection_exits_without_opening_a_port(self):
+        self.enumerate_ports.side_effect = KeyboardInterrupt
+
+        monitor.main(["--usb-location", "1A86:7523", "1-4.4"])
+
+        self.open_port.assert_not_called()
+        self.sleep.assert_not_called()
+        self.assert_stopped()
+
+    def test_invalid_selection_exits_before_enumeration_or_open(self):
+        for args in (
+            [],
+            ["--port", "  "],
+            ["--port", "COM3", "--usb-serial", "1A86:7523", "TARGET"],
+            ["--usb-serial", "1A86:7523", "TARGET", "--usb-location", "1A86:7523", "1-4.4"],
+            ["--usb-location", "1A86:xyz0", "1-4.4"],
+            ["--usb-location", "1A86:7523"],
+            ["--usb-location", "1A86:7523", ""],
+            ["--usb-serial", "1A86:7523", "  "],
+        ):
+            with self.subTest(args=args), redirect_stderr(io.StringIO()):
+                with self.assertRaises(SystemExit) as raised:
+                    monitor.main(args)
+                self.assertEqual(raised.exception.code, 2)
+
+        self.enumerate_ports.assert_not_called()
+        self.open_port.assert_not_called()
 
 
 if __name__ == "__main__":
