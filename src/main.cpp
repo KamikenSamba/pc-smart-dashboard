@@ -1,6 +1,7 @@
 #include <Arduino.h>
 #include <TFT_eSPI.h>
-#include <ArduinoJson.h>
+
+#include "telemetry_receiver.h"
 
 TFT_eSPI tft = TFT_eSPI();
 
@@ -14,6 +15,27 @@ const int innerWidth = bar_width - 2;
 const int innerHeight = bar_height - 2;
 const float cpu_usage = 0; // Example CPU usage percentage 
 const float ram_usage = 0; // Example RAM usage percentage
+
+constexpr size_t kSerialBytesPerLoop = 128;
+
+static void drawLinkStatus(LinkStatus status) {
+  const char* label = "WAITING FOR DATA";
+  switch (status) {
+    case LinkStatus::Waiting:
+      break;
+    case LinkStatus::Connected:
+      label = "CONNECTED";
+      break;
+    case LinkStatus::DataError:
+      label = "DATA ERROR";
+      break;
+    case LinkStatus::NoSignal:
+      label = "NO SIGNAL";
+      break;
+  }
+  tft.fillRect(0, 280, tft.width(), 40, TFT_BLACK);
+  tft.drawString(label, tft.width() / 2, 300, 2);
+}
 
 void setup() {
   // put your setup code here, to run once:
@@ -52,6 +74,7 @@ void setup() {
   {
     tft.fillRect(centerX + 10 + (panelWidth - bar_width) / 2 + 1, 210 + 1, (innerWidth * ram_usage) / 100, innerHeight, TFT_GREEN);
   }
+  drawLinkStatus(LinkStatus::Waiting);
 }
 
 void updateCpuDisplay(float cpu) {
@@ -76,28 +99,27 @@ void updateRamDisplay(float ram) {
 }
 
 void loop() {
+  const uint32_t now = millis();
+  static TelemetryReceiver receiver(now);
+  const LinkStatus previousStatus = receiver.status();
+  receiver.updateTimeout(now);
 
-  if (Serial.available() > 0) {
-    String message = Serial.readStringUntil('\n');
-
-    JsonDocument doc;
-    DeserializationError error = deserializeJson(doc, message);
-
-    if (error) {
-      tft.fillRect(0, 280, tft.width(), 40, TFT_BLACK);
-      tft.drawString("JSON ERROR", tft.width() / 2, 300, 2);
-      return;
+  // Limit work per pass so a continuous stream cannot starve the timeout check.
+  bool receivedSample = false;
+  for (size_t count = 0; count < kSerialBytesPerLoop; ++count) {
+    const int byte = Serial.read();
+    if (byte < 0) {
+      break;
     }
-
-    float cpu = doc["cpu"].as<float>();
-    float ram = doc["ram"].as<float>();
-
-    String info = "CPU: " + String(cpu, 0)
-                + "% RAM: " + String(ram, 0) + "%";
-    tft.fillRect(0, 280, tft.width(), 40, TFT_BLACK);
-    tft.drawString(info, tft.width() / 2, 300, 2);
-
-    updateCpuDisplay(cpu);
-    updateRamDisplay(ram);
+    if (receiver.consume(static_cast<char>(byte), now)) {
+      receivedSample = true;
+    }
+  }
+  if (receivedSample) {
+    updateCpuDisplay(receiver.latest().cpu);
+    updateRamDisplay(receiver.latest().ram);
+  }
+  if (receiver.status() != previousStatus) {
+    drawLinkStatus(receiver.status());
   }
 }
